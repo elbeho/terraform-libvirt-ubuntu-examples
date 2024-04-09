@@ -1,8 +1,28 @@
 # variables that can be overriden
 variable "hostname" { default = "simple" }
-variable "domain" { default = "example.com" }
+variable "domain" { default = "localdomain" }
 variable "memoryMB" { default = 1024*1 }
 variable "cpu" { default = 1 }
+variable "image_path" { default = "../../matlab-rep/terraform/input/qcow/Rocky-8-GenericCloud-LVM-8.7-20230215.0.x86_64.qcow2" }
+
+
+terraform { 
+  required_version = ">= 0.12"
+  required_providers {
+    libvirt = {
+      source  = "dmacvicar/libvirt"
+      version = "0.7.6"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "2.4.1"
+    }
+    cloudinit = {
+      source  = "hashicorp/cloudinit"
+      version = "2.3.3"
+    }
+  }
+}
 
 # instance the provider
 provider "libvirt" {
@@ -11,31 +31,42 @@ provider "libvirt" {
 
 # fetch the latest ubuntu release image from their mirrors
 resource "libvirt_volume" "os_image" {
-  name = "${var.hostname}-os_image"
+  name   = "${var.hostname}-os-volume"
   pool = "default"
-  source = "https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img"
+  source = "${var.image_path}"
   format = "qcow2"
 }
 
 # Use CloudInit ISO to add ssh-key to the instance
 resource "libvirt_cloudinit_disk" "commoninit" {
-          name = "${var.hostname}-commoninit.iso"
-          pool = "default"
-          user_data = data.template_file.user_data.rendered
-          network_config = data.template_file.network_config.rendered
+  name = "${var.hostname}-commoninit.iso"
+  pool = "default"
+  #user_data = data.template_file.user_data.rendered
+  #network_config = data.template_file.network_config.rendered
+  user_data = data.cloudinit_config.config.rendered
 }
 
 
-data "template_file" "user_data" {
-  template = file("${path.module}/cloud_init.cfg")
-  vars = {
-    hostname = var.hostname
-    fqdn = "${var.hostname}.${var.domain}"
+data "cloudinit_config" "config" {
+  gzip          = false
+  base64_encode = false
+
+  part {
+    filename     = "cloud_init.yaml"
+    content_type = "text/cloud-config"
+
+    content = templatefile("${path.module}/cloud_init.cfg", {
+       hostname = var.hostname
+       fqdn = "${var.hostname}.${var.domain}"
+    })
   }
-}
+  part {
+    filename     = "network_config_dhcp.yaml"
+    content_type = "text/cloud-config"
 
-data "template_file" "network_config" {
-  template = file("${path.module}/network_config_dhcp.cfg")
+    content = file("${path.module}/network_config_dhcp.cfg")
+  }
+
 }
 
 
@@ -70,11 +101,10 @@ resource "libvirt_domain" "domain-ubuntu" {
   }
 }
 
-terraform { 
-  required_version = ">= 0.12"
-}
 
 output "ips" {
   # show IP, run 'terraform refresh' if not populated
   value = libvirt_domain.domain-ubuntu.*.network_interface.0.addresses
 }
+
+
